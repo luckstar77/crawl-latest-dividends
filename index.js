@@ -40,10 +40,7 @@ async function getStocks() {
     return await request(endpoint, query);
 }
 
-exports.handler = async function(event, context) {
-  const symbol = process.argv[2];
-  const { stocks } = await getStocks();
-  const stock = _.find(stocks, {symbol});
+async function crawlDividend(symbol, stock) {
   let $ = cheerio.load(await rp(`https://stock-ai.com/tw-Dly-8-${symbol}`));
   $ = cheerio.load(await rp(`https://stock-ai.com/lazyLoad?pType=tZ&symbolCode=${symbol}&md5ChkSum=${$.html().match(/md5ChkSum='([a-z0-9]+)'/)[1]}&_=${Date.now()}`));
   
@@ -93,6 +90,24 @@ exports.handler = async function(event, context) {
   } catch (error) {
       console.error(error)
   }
+}
 
+exports.handler = async function(event, context) {
+  let $ = cheerio.load(await rp({
+    uri: 'https://stock.wespai.com/p/51227',
+    headers: {
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/76.0.3809.132 Safari/537.36',
+    },
+    json: true
+  }));
+  let result = await Promise.all(_.map($('#example tbody tr'), stock=>{
+      const stock = {
+          symbol: $(stock).children("td").eq(0).text(),
+          company: $(stock).children("td").eq(1).text(),
+          price: parseFloat($(stock).children("td").eq(2).text()),
+      };
+      return await crawlDividend(stock.symbol, stock);
+  }));
+  
   return 'ok';
 }
