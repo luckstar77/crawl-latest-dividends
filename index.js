@@ -1,6 +1,5 @@
 const rp = require('request-promise')
 const cheerio = require('cheerio');
-const _ = require('lodash');
 const { request } = require('graphql-request');
 
 const endpoint = process.env.GRAPHQL_ENDPOINT || 'http://localhost:7001/graphql'
@@ -40,9 +39,8 @@ async function getStocks() {
     return await request(endpoint, query);
 }
 
-async function crawlDividend(symbol, stock) {
-  let $ = cheerio.load(await rp(`https://stock-ai.com/tw-Dly-8-${symbol}`));
-  $ = cheerio.load(await rp(`https://stock-ai.com/lazyLoad?pType=tZ&symbolCode=${symbol}&md5ChkSum=${$.html().match(/md5ChkSum='([a-z0-9]+)'/)[1]}&_=${Date.now()}`));
+async function crawlDividend(symbol, stock, md5ChkSum) {
+  $ = cheerio.load(await rp(`https://stock-ai.com/lazyLoad?pType=tZ&symbolCode=${symbol}&md5ChkSum=${md5ChkSum}&_=${Date.now()}`));
   
   const DividendTr = $('tbody tr');
   let dividends = [];
@@ -75,18 +73,16 @@ async function crawlDividend(symbol, stock) {
       dividendAvg = dividendAvg / dividendCount;
   }
 
-  let stocksWithDividend = [];
   try {
-      stocksWithDividend.push({
-          ...stock,
-          dividends: dividends,
-          dividendAvg,
-          dividendCount,
-          dividendSuccessCount,
-          dividendSuccessPercent,
-      });
+      return {
+        ...stock,
+        dividends: dividends,
+        dividendAvg,
+        dividendCount,
+        dividendSuccessCount,
+        dividendSuccessPercent,
+    };
 
-      let result = await upsertStocks(stocksWithDividend).catch(error => console.error(error));
   } catch (error) {
       console.error(error)
   }
@@ -100,14 +96,28 @@ exports.handler = async function(event, context) {
     },
     json: true
   }));
-  let result = await Promise.all(_.map($('#example tbody tr'), stock=>{
-      const stock = {
-          symbol: $(stock).children("td").eq(0).text(),
-          company: $(stock).children("td").eq(1).text(),
-          price: parseFloat($(stock).children("td").eq(2).text()),
-      };
-      return await crawlDividend(stock.symbol, stock);
-  }));
+  let md5ChkSum = cheerio.load(await rp(`https://stock-ai.com/tw-Dly-8-2618`)).html().match(/md5ChkSum='([a-z0-9]+)'/)[1];
+  
+  let stocksWithDividend = [];
+  let stocksGroups = [];
+  let stocks = $('#example tbody tr').map((index, stock) => {
+      let idx = parseInt(index / 50);
+      if(!stocksGroups[idx]) stocksGroups[idx] = [];
+      stocksGroups[idx].push({
+        symbol: $(stock).children("td").eq(0).text(),
+        company: $(stock).children("td").eq(1).text(),
+        price: parseFloat($(stock).children("td").eq(2).text()),
+      })
+    }).get();
+  
+
+  for(let group of stocksGroups) {
+    stocksWithDividend = [];
+    await Promise.all(group.map(async stock => {
+      stocksWithDividend.push(await crawlDividend(stock.symbol, stock, md5ChkSum));
+    }));
+    let result = await upsertStocks(stocksWithDividend).catch(error => console.error(error));
+  }
   
   return 'ok';
 }
